@@ -1,106 +1,92 @@
-import re
-import io
 import streamlit as st
+import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
+import re
+import io
 
 st.title("EPUB Chapter Splitter")
 
-st.markdown("""
-This app accepts an EPUB file, extracts the full text, splits it into chapters by detecting chapter markers (e.g., “第1章”, “第2章”, etc.), and then creates a new EPUB where each chapter is a separate section.
-""")
+uploaded_file = st.file_uploader("Upload an EPUB file", type=['epub'])
 
-uploaded_file = st.file_uploader("Upload an EPUB file", type=["epub"])
-
-def extract_text_from_epub(epub_file):
-    """Extract text from each document item in the epub and join into one text."""
-    book = epub.read_epub(epub_file)
-    full_text = ""
-    # We assume items of type DOCUMENT contain the text.
+def extract_text_from_epub(book):
+    full_text = []
     for item in book.get_items():
-        if item.get_type() == epub.EpubHtml:
-            # Get HTML content and convert to plain text.
-            soup = BeautifulSoup(item.get_body_content(), "html.parser")
-            text = soup.get_text(separator="\n")
-            full_text += text + "\n"
-    return full_text
+        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+            soup = BeautifulSoup(item.get_content(), 'html.parser')
+            text = soup.get_text(separator='\n', strip=True)
+            full_text.append(text)
+    return '\n'.join(full_text)
 
-def split_into_chapters(text):
-    """
-    Split text into chapters using a regex that finds lines starting with chapter markers.
-    This regex assumes that a chapter heading looks like "第<number>章" at the beginning of a line.
-    """
-    # Use a regex with a capture group so we keep the chapter heading.
-    # The (?m) flag makes ^ match the start of each line.
-    pattern = r'(?m)^(第\d+章.*)$'
-    parts = re.split(pattern, text)
+def split_chapters(text):
+    chapter_pattern = re.compile(r'^第(\d+)章', re.MULTILINE)
+    matches = list(chapter_pattern.finditer(text))
     
     chapters = []
-    # If the file starts with a chapter heading, the first element might be empty.
-    # The list will be like: [pre_text, chapter_heading, chapter_content, chapter_heading, chapter_content, ...]
-    if parts[0].strip() != "":
-        # Optional: if there is some introductory text before the first chapter, add it as "Intro"
-        chapters.append(("Intro", parts[0]))
-    
-    # Iterate over remaining parts pairwise: (heading, content)
-    for i in range(1, len(parts), 2):
-        heading = parts[i].strip()
-        content = parts[i+1] if i+1 < len(parts) else ""
-        chapters.append((heading, content))
+    for i, match in enumerate(matches):
+        start = match.start()
+        end = matches[i+1].start() if i+1 < len(matches) else len(text)
+        chapter_number = match.group(1)
+        chapter_content = text[start:end].strip()
+        chapters.append((chapter_number, chapter_content))
     return chapters
 
-def create_new_epub(chapters):
-    """Create a new EPUB book from chapters, where each chapter is an epub.EpubHtml item."""
-    book = epub.EpubBook()
-    book.set_title("New EPUB with Chapters")
-    book.add_author("Auto-generated")
+def create_new_epub(original_book, chapters):
+    new_book = epub.EpubBook()
     
+    # Copy metadata from original
+    new_book.set_identifier(original_book.get_identifier())
+    new_book.set_title(original_book.get_metadata('DC', 'title')[0][0] 
+                      if original_book.get_metadata('DC', 'title') else 'Untitled')
+    new_book.set_language('zh')
+    
+    # Add CSS styling
+    style = epub.EpubItem(uid="style_nav", file_name="style.css", 
+                         media_type="text/css", content='''
+        body { font-family: Arial, sans-serif; line-height: 1.6; }
+        h1 { page-break-before: always; }
+    ''')
+    new_book.add_item(style)
+    
+    # Create chapters
     epub_chapters = []
-    for idx, (heading, content) in enumerate(chapters):
-        # Use the chapter marker as title if possible, else fallback to Chapter {idx}
-        chap_title = heading if re.match(r"第\d+章", heading) else f"Chapter {idx}"
-        chapter_html = epub.EpubHtml(title=chap_title, file_name=f'chap_{idx}.xhtml', lang='zh')
-        # Wrap content in minimal HTML. Here, we use the chapter heading as an <h1> if it is a marker.
-        chapter_content = f"<h1>{heading}</h1>\n<p>{content.replace(chr(10), '</p><p>')}</p>"
-        chapter_html.content = chapter_content
-        book.add_item(chapter_html)
-        epub_chapters.append(chapter_html)
+    for number, content in chapters:
+        chapter = epub.EpubHtml(title=f'第{number}章', 
+                               file_name=f'chapter_{number}.xhtml', 
+                               lang='zh')
+        chapter.content = f'<h1>第{number}章</h1><div>{content.replace("\n", "<br/>")}</div>'
+        chapter.add_item(style)
+        new_book.add_item(chapter)
+        epub_chapters.append(chapter)
     
-    # Define Table of Contents and Spine order.
-    book.toc = tuple(epub_chapters)
-    book.spine = ['nav'] + epub_chapters
+    new_book.toc = tuple(epub_chapters)
+    new_book.spine = epub_chapters
+    new_book.add_item(epub.EpubNcx())
+    new_book.add_item(epub.EpubNav())
     
-    # Add default NCX and Nav file.
-    book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
-    
-    # Write to a bytes buffer.
-    out = io.BytesIO()
-    epub.write_epub(out, book)
-    out.seek(0)
-    return out
+    return new_book
 
-if uploaded_file:
-    # Read and extract text.
-    full_text = extract_text_from_epub(uploaded_file)
-    if not full_text.strip():
-        st.error("No textual content could be extracted from the EPUB.")
-    else:
-        st.markdown("### Extracted text preview")
-        st.text_area("Preview (first 1000 characters)", full_text[:1000], height=200)
+if uploaded_file is not None:
+    try:
+        # Process EPUB
+        original_book = epub.read_epub(uploaded_file)
+        text_content = extract_text_from_epub(original_book)
+        chapters = split_chapters(text_content)
         
-        # Split into chapters based on chapter markers.
-        chapters = split_into_chapters(full_text)
-        st.write(f"Found {len(chapters)} chapters (or sections).")
-        
-        # Show list of chapter headings.
-        for idx, (heading, _) in enumerate(chapters):
-            st.write(f"{idx+1}. {heading}")
-        
-        # Create new epub
-        if st.button("Create new EPUB"):
-            new_epub_io = create_new_epub(chapters)
-            st.download_button(label="Download new EPUB",
-                               data=new_epub_io,
-                               file_name="new_chapters.epub",
-                               mime="application/epub+zip")
+        if not chapters:
+            st.error("No chapters found! Ensure your EPUB contains lines like '第1章', '第2章'")
+        else:
+            new_epub = create_new_epub(original_book, chapters)
+            
+            # Prepare download
+            buffer = io.BytesIO()
+            epub.write_epub(buffer, new_epub, {})
+            buffer.seek(0)
+            
+            st.success(f"Successfully created {len(chapters)} chapters!")
+            st.download_button("Download Processed EPUB", 
+                             data=buffer, 
+                             file_name='processed.epub',
+                             mime='application/epub+zip')
+    except Exception as e:
+        st.error(f"Error processing EPUB: {str(e)}")
