@@ -1,92 +1,92 @@
-import streamlit as st
-import ebooklib
-from ebooklib import epub
-from bs4 import BeautifulSoup
 import re
 import io
+import streamlit as st
+from ebooklib import epub
+from bs4 import BeautifulSoup
 
-st.title("EPUB Chapter Splitter")
+st.title("EPUB Chapter Fixer")
 
-uploaded_file = st.file_uploader("Upload an EPUB file", type=['epub'])
+st.markdown("""
+This app accepts an EPUB file, extracts text, splits it into chapters by detecting chapter markers (e.g., “第1章”, “第2章”, etc.), and generates a corrected EPUB.
+""")
 
-def extract_text_from_epub(book):
-    full_text = []
-    for item in book.get_items():
-        if item.get_type() == ebooklib.ITEM_DOCUMENT:
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
-            text = soup.get_text(separator='\n', strip=True)
-            full_text.append(text)
-    return '\n'.join(full_text)
+uploaded_file = st.file_uploader("Upload an EPUB file", type=["epub"])
 
-def split_chapters(text):
-    chapter_pattern = re.compile(r'^第(\d+)章', re.MULTILINE)
-    matches = list(chapter_pattern.finditer(text))
+def extract_text_from_epub(uploaded_file):
+    """Extracts text from an EPUB file using ebooklib."""
+    book = epub.read_epub(io.BytesIO(uploaded_file.read()))  # Ensure correct file handling
+    full_text = ""
     
+    for item in book.get_items():
+        if item.get_type() == epub.EpubHtml:
+            soup = BeautifulSoup(item.get_body_content(), "html.parser")
+            text = soup.get_text(separator="\n")
+            full_text += text + "\n"
+    
+    return full_text
+
+def split_into_chapters(text):
+    """
+    Splits text into chapters based on lines that start with '第XX章'.
+    """
+    pattern = r'(?m)^(第\d+章.*)$'
+    parts = re.split(pattern, text)
+
     chapters = []
-    for i, match in enumerate(matches):
-        start = match.start()
-        end = matches[i+1].start() if i+1 < len(matches) else len(text)
-        chapter_number = match.group(1)
-        chapter_content = text[start:end].strip()
-        chapters.append((chapter_number, chapter_content))
+    if parts[0].strip():
+        chapters.append(("Intro", parts[0]))
+
+    for i in range(1, len(parts), 2):
+        heading = parts[i].strip()
+        content = parts[i+1] if i+1 < len(parts) else ""
+        chapters.append((heading, content))
+    
     return chapters
 
-def create_new_epub(original_book, chapters):
-    new_book = epub.EpubBook()
-    
-    # Copy metadata from original
-    new_book.set_identifier(original_book.get_identifier())
-    new_book.set_title(original_book.get_metadata('DC', 'title')[0][0] 
-                      if original_book.get_metadata('DC', 'title') else 'Untitled')
-    new_book.set_language('zh')
-    
-    # Add CSS styling
-    style = epub.EpubItem(uid="style_nav", file_name="style.css", 
-                         media_type="text/css", content='''
-        body { font-family: Arial, sans-serif; line-height: 1.6; }
-        h1 { page-break-before: always; }
-    ''')
-    new_book.add_item(style)
-    
-    # Create chapters
-    epub_chapters = []
-    for number, content in chapters:
-        chapter = epub.EpubHtml(title=f'第{number}章', 
-                               file_name=f'chapter_{number}.xhtml', 
-                               lang='zh')
-        chapter.content = f'<h1>第{number}章</h1><div>{content.replace("\n", "<br/>")}</div>'
-        chapter.add_item(style)
-        new_book.add_item(chapter)
-        epub_chapters.append(chapter)
-    
-    new_book.toc = tuple(epub_chapters)
-    new_book.spine = epub_chapters
-    new_book.add_item(epub.EpubNcx())
-    new_book.add_item(epub.EpubNav())
-    
-    return new_book
+def create_new_epub(chapters):
+    """Creates a new EPUB with corrected chapters."""
+    book = epub.EpubBook()
+    book.set_title("Fixed EPUB")
+    book.add_author("Auto-generated")
 
-if uploaded_file is not None:
-    try:
-        # Process EPUB
-        original_book = epub.read_epub(uploaded_file)
-        text_content = extract_text_from_epub(original_book)
-        chapters = split_chapters(text_content)
-        
-        if not chapters:
-            st.error("No chapters found! Ensure your EPUB contains lines like '第1章', '第2章'")
-        else:
-            new_epub = create_new_epub(original_book, chapters)
-            
-            # Prepare download
-            buffer = io.BytesIO()
-            epub.write_epub(buffer, new_epub, {})
-            buffer.seek(0)
-            
-            st.success(f"Successfully created {len(chapters)} chapters!")
-            st.download_button("Download Processed EPUB", 
-                             data=buffer, 
-                             file_name='processed.epub',
-                             mime='application/epub+zip')
-    except Exception as e:
-        st.error(f"Error processing EPUB: {str(e)}")
+    epub_chapters = []
+    for idx, (heading, content) in enumerate(chapters):
+        chap_title = heading if re.match(r"第\d+章", heading) else f"Chapter {idx}"
+        chapter_html = epub.EpubHtml(title=chap_title, file_name=f'chap_{idx}.xhtml', lang='zh')
+        chapter_content = f"<h1>{heading}</h1>\n<p>{content.replace(chr(10), '</p><p>')}</p>"
+        chapter_html.content = chapter_content
+        book.add_item(chapter_html)
+        epub_chapters.append(chapter_html)
+
+    book.toc = tuple(epub_chapters)
+    book.spine = ['nav'] + epub_chapters
+
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+
+    out = io.BytesIO()
+    epub.write_epub(out, book)
+    out.seek(0)
+    return out
+
+if uploaded_file:
+    full_text = extract_text_from_epub(uploaded_file)
+    
+    if not full_text.strip():
+        st.error("No textual content could be extracted from the EPUB.")
+    else:
+        st.markdown("### Extracted Text Preview")
+        st.text_area("Preview (first 1000 characters)", full_text[:1000], height=200)
+
+        chapters = split_into_chapters(full_text)
+        st.write(f"Detected {len(chapters)} chapters.")
+
+        for idx, (heading, _) in enumerate(chapters):
+            st.write(f"{idx+1}. {heading}")
+
+        if st.button("Generate Fixed EPUB"):
+            new_epub_io = create_new_epub(chapters)
+            st.download_button(label="Download Fixed EPUB",
+                               data=new_epub_io,
+                               file_name="fixed_book.epub",
+                               mime="application/epub+zip")
