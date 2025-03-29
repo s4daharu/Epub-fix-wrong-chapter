@@ -2,7 +2,7 @@ import re
 import io
 import streamlit as st
 import tempfile
-from ebooklib import epub
+from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
 
 st.title("EPUB Chapter Fixer")
@@ -16,7 +16,6 @@ uploaded_file = st.file_uploader("Upload an EPUB file", type=["epub"])
 def extract_text_from_epub(uploaded_file):
     """
     Extracts text from an EPUB file by writing it to a temporary file and then parsing all document items.
-    Uses epub.ITEM_DOCUMENT to get all HTML content.
     """
     # Reset the file pointer.
     uploaded_file.seek(0)
@@ -31,10 +30,10 @@ def extract_text_from_epub(uploaded_file):
     full_text = ""
 
     # Iterate over all document items in the EPUB.
-    for item in book.get_items_of_type(epub.ITEM_DOCUMENT):
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
         # Use get_content() to obtain the raw HTML content.
         content = item.get_content()
-        # If content is in bytes, BeautifulSoup will handle decoding.
+        # Parse the HTML content.
         soup = BeautifulSoup(content, "html.parser")
         text = soup.get_text(separator="\n")
         full_text += text + "\n"
@@ -46,7 +45,6 @@ def split_into_chapters(text):
     Splits the full text into chapters by finding lines starting with a chapter marker.
     Assumes chapter headings match the pattern '第<number>章' at the start of a line.
     """
-    # Multiline regex to capture lines beginning with the chapter marker.
     pattern = r'(?m)^(第\d+章.*)$'
     parts = re.split(pattern, text)
 
@@ -77,7 +75,6 @@ def create_new_epub(chapters):
         # Use the chapter heading if it matches the expected pattern; otherwise, assign a default chapter title.
         chap_title = heading if re.match(r"第\d+章", heading) else f"Chapter {idx}"
         chapter_html = epub.EpubHtml(title=chap_title, file_name=f'chap_{idx}.xhtml', lang='zh')
-        # Wrap the heading and content in basic HTML structure.
         chapter_content = f"<h1>{heading}</h1>\n<p>{content.replace(chr(10), '</p><p>')}</p>"
         chapter_html.content = chapter_content
         book.add_item(chapter_html)
@@ -86,7 +83,6 @@ def create_new_epub(chapters):
     book.toc = tuple(epub_chapters)
     book.spine = ['nav'] + epub_chapters
 
-    # Add navigation files.
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
