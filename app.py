@@ -14,11 +14,14 @@ This app accepts an EPUB file, extracts text, splits it into chapters by detecti
 uploaded_file = st.file_uploader("Upload an EPUB file", type=["epub"])
 
 def extract_text_from_epub(uploaded_file):
-    """Extracts text from an EPUB file by first writing it to a temporary file."""
-    # Ensure the file pointer is at the start
+    """
+    Extracts text from an EPUB file by writing it to a temporary file and then parsing all document items.
+    Uses epub.ITEM_DOCUMENT to get all HTML content.
+    """
+    # Reset the file pointer.
     uploaded_file.seek(0)
     
-    # Write the uploaded file to a temporary file so that ebooklib can read it as a file path.
+    # Write the uploaded file to a temporary file so that ebooklib can read it by path.
     with tempfile.NamedTemporaryFile(delete=False, suffix='.epub') as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
@@ -27,28 +30,32 @@ def extract_text_from_epub(uploaded_file):
     book = epub.read_epub(tmp_path)
     full_text = ""
 
-    for item in book.get_items():
-        if item.get_type() == epub.EpubHtml:
-            soup = BeautifulSoup(item.get_body_content(), "html.parser")
-            text = soup.get_text(separator="\n")
-            full_text += text + "\n"
+    # Iterate over all document items in the EPUB.
+    for item in book.get_items_of_type(epub.ITEM_DOCUMENT):
+        # Use get_content() to obtain the raw HTML content.
+        content = item.get_content()
+        # If content is in bytes, BeautifulSoup will handle decoding.
+        soup = BeautifulSoup(content, "html.parser")
+        text = soup.get_text(separator="\n")
+        full_text += text + "\n"
 
     return full_text
 
 def split_into_chapters(text):
     """
-    Splits text into chapters based on lines that start with '第XX章'.
+    Splits the full text into chapters by finding lines starting with a chapter marker.
+    Assumes chapter headings match the pattern '第<number>章' at the start of a line.
     """
-    # The regex uses the multiline flag so ^ matches the beginning of each line.
+    # Multiline regex to capture lines beginning with the chapter marker.
     pattern = r'(?m)^(第\d+章.*)$'
     parts = re.split(pattern, text)
 
     chapters = []
-    # If there's preface or introductory text before the first chapter marker.
+    # If there's introductory text before the first chapter marker, capture it.
     if parts[0].strip():
         chapters.append(("Intro", parts[0]))
 
-    # Process each chapter heading and its corresponding content.
+    # Process remaining parts in pairs: (chapter heading, chapter content)
     for i in range(1, len(parts), 2):
         heading = parts[i].strip()
         content = parts[i+1] if i+1 < len(parts) else ""
@@ -57,17 +64,20 @@ def split_into_chapters(text):
     return chapters
 
 def create_new_epub(chapters):
-    """Creates a new EPUB with correctly structured chapters."""
+    """
+    Creates a new EPUB book from the list of chapters.
+    Each chapter is added as a separate section.
+    """
     book = epub.EpubBook()
     book.set_title("Fixed EPUB")
     book.add_author("Auto-generated")
 
     epub_chapters = []
     for idx, (heading, content) in enumerate(chapters):
-        # Use the chapter marker as title if possible.
+        # Use the chapter heading if it matches the expected pattern; otherwise, assign a default chapter title.
         chap_title = heading if re.match(r"第\d+章", heading) else f"Chapter {idx}"
         chapter_html = epub.EpubHtml(title=chap_title, file_name=f'chap_{idx}.xhtml', lang='zh')
-        # Wrap the heading and content in simple HTML.
+        # Wrap the heading and content in basic HTML structure.
         chapter_content = f"<h1>{heading}</h1>\n<p>{content.replace(chr(10), '</p><p>')}</p>"
         chapter_html.content = chapter_content
         book.add_item(chapter_html)
