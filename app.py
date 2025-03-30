@@ -73,8 +73,12 @@ def create_new_epub(original_book, chapters):
 
 if uploaded_file:
     try:
-        # Read the uploaded EPUB
-        book = epub.read_epub(uploaded_file)
+        # Read the uploaded EPUB file bytes
+        epub_bytes = uploaded_file.read()
+        
+        # Load EPUB from bytes
+        book = epub.read_epub(io.BytesIO(epub_bytes))
+        
         text_content = extract_text_from_epub(book)
         
         # Split into chapters
