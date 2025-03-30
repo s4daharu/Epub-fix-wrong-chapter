@@ -78,12 +78,18 @@ if uploaded_file:
         # Read the uploaded EPUB file bytes
         epub_bytes = uploaded_file.read()
         
-        # Load EPUB from bytes
-        book = epub.read_epub(io.BytesIO(epub_bytes))
+        # Load EPUB using a temporary file (to avoid BytesIO issues)
+        with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as tmp_input:
+            tmp_input.write(epub_bytes)
+            tmp_input.flush()
+            
+            # Read EPUB from temporary file path
+            book = epub.read_epub(tmp_input.name)
+            
+            # Clean up input temporary file immediately
+            os.remove(tmp_input.name)
         
         text_content = extract_text_from_epub(book)
-        
-        # Split into chapters
         chapters = split_chapters(text_content)
         
         if not chapters:
@@ -94,16 +100,16 @@ if uploaded_file:
             # Create new EPUB
             new_book = create_new_epub(book, chapters)
             
-            # Generate download link using temporary file
-            with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as tmp_file:
-                epub.write_epub(tmp_file.name, new_book)
-                tmp_file.flush()
+            # Generate output using temporary file
+            with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as tmp_output:
+                epub.write_epub(tmp_output.name, new_book)
+                tmp_output.flush()
                 
-                with open(tmp_file.name, 'rb') as f:
+                with open(tmp_output.name, 'rb') as f:
                     buffer = io.BytesIO(f.read())
             
-            # Clean up temporary file
-            os.remove(tmp_file.name)
+            # Clean up output temporary file
+            os.remove(tmp_output.name)
             
             buffer.seek(0)
             
