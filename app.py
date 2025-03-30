@@ -4,6 +4,8 @@ from ebooklib import epub
 from bs4 import BeautifulSoup
 import re
 import io
+import tempfile
+import os
 from zipfile import BadZipFile
 
 st.title("EPUB Chapter Splitter")
@@ -92,9 +94,17 @@ if uploaded_file:
             # Create new EPUB
             new_book = create_new_epub(book, chapters)
             
-            # Generate download link
-            buffer = io.BytesIO()
-            epub.write_epub(buffer, new_book)
+            # Generate download link using temporary file
+            with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as tmp_file:
+                epub.write_epub(tmp_file.name, new_book)
+                tmp_file.flush()
+                
+                with open(tmp_file.name, 'rb') as f:
+                    buffer = io.BytesIO(f.read())
+            
+            # Clean up temporary file
+            os.remove(tmp_file.name)
+            
             buffer.seek(0)
             
             st.download_button(
