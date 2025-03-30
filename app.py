@@ -39,15 +39,33 @@ def split_chapters(text):
 def create_new_epub(original_book, chapters):
     new_book = epub.EpubBook()
     
-    # Copy metadata from original
-    new_book.set_identifier(original_book.get_identifier())
-    new_book.set_title(original_book.get_metadata('DC', 'title')[0][0])
-    new_book.set_language(original_book.get_metadata('DC', 'language')[0][0])
+    # Copy metadata from original with error handling
+    try:
+        new_book.set_identifier(
+            original_book.get_metadata('DC', 'identifier')[0][0] 
+            if original_book.get_metadata('DC', 'identifier') 
+            else 'unknown'
+        )
+    except:
+        new_book.set_identifier('unknown')
     
-    # Prepare author metadata
+    new_book.set_title(
+        original_book.title[0][0] 
+        if original_book.get_metadata('DC', 'title') 
+        else 'Untitled'
+    )
+    
+    new_book.set_language(
+        original_book.get_metadata('DC', 'language')[0][0] 
+        if original_book.get_metadata('DC', 'language') 
+        else 'zh'
+    )
+    
+    # Add authors if available
     authors = original_book.get_metadata('DC', 'creator')
     if authors:
-        new_book.add_author(authors[0][0])
+        for author in authors:
+            new_book.add_author(author[0])
     
     # Create chapters
     epub_chapters = []
@@ -64,7 +82,7 @@ def create_new_epub(original_book, chapters):
     # Define Table of Contents
     new_book.toc = tuple(epub_chapters)
     
-    # Add default NCX and Nav files
+    # Add default files
     new_book.add_item(epub.EpubNcx())
     new_book.add_item(epub.EpubNav())
     
@@ -75,18 +93,14 @@ def create_new_epub(original_book, chapters):
 
 if uploaded_file:
     try:
-        # Read the uploaded EPUB file bytes
+        # Process input file
         epub_bytes = uploaded_file.read()
         
-        # Load EPUB using a temporary file (to avoid BytesIO issues)
         with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as tmp_input:
             tmp_input.write(epub_bytes)
             tmp_input.flush()
             
-            # Read EPUB from temporary file path
             book = epub.read_epub(tmp_input.name)
-            
-            # Clean up input temporary file immediately
             os.remove(tmp_input.name)
         
         text_content = extract_text_from_epub(book)
@@ -97,10 +111,9 @@ if uploaded_file:
         else:
             st.success(f"Detected {len(chapters)} chapters. Creating new EPUB...")
             
-            # Create new EPUB
+            # Create and save new EPUB
             new_book = create_new_epub(book, chapters)
             
-            # Generate output using temporary file
             with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as tmp_output:
                 epub.write_epub(tmp_output.name, new_book)
                 tmp_output.flush()
@@ -108,9 +121,7 @@ if uploaded_file:
                 with open(tmp_output.name, 'rb') as f:
                     buffer = io.BytesIO(f.read())
             
-            # Clean up output temporary file
             os.remove(tmp_output.name)
-            
             buffer.seek(0)
             
             st.download_button(
